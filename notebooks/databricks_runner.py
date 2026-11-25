@@ -56,19 +56,14 @@ os.environ["LLM_PROVIDER"] = dbutils.widgets.get("llm_provider")  # type: ignore
 os.environ["LLM_MODEL"] = dbutils.widgets.get("llm_model")  # type: ignore[name-defined]
 os.environ["RETRIEVER_BACKEND"] = dbutils.widgets.get("retriever_backend")  # type: ignore[name-defined]
 os.environ["CHROMA_PERSIST_DIR"] = "/tmp/chroma_db"
-os.environ["EMBEDDING_PROVIDER"] = "databricks"
-os.environ["EMBEDDING_MODEL"] = "databricks-qwen3-embedding-0-6b"
-os.environ["TOP_K_CLAUSES"] = "7"
+# Embeddings locales en CPU: sin rate limits 429 y multilingües ES <-> EN
+os.environ["EMBEDDING_PROVIDER"] = "local"
+os.environ["EMBEDDING_MODEL"] = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+os.environ["TOP_K_CLAUSES"] = "6"
 os.environ["ENABLE_VLM"] = dbutils.widgets.get("enable_vlm")  # type: ignore[name-defined]
 os.environ["VLM_MODEL"] = "databricks-llama-4-maverick"
 
-# Si el Día 1 Airbus facilita secrets en Databricks (Azure OpenAI / Azure AI Search), descomenta y ajusta el scope:
-# os.environ["AZURE_OPENAI_ENDPOINT"] = dbutils.secrets.get("airbus-scope", "azure-openai-endpoint")
-# os.environ["AZURE_OPENAI_API_KEY"] = dbutils.secrets.get("airbus-scope", "azure-openai-key")
-# os.environ["AZURE_SEARCH_ENDPOINT"] = dbutils.secrets.get("airbus-scope", "azure-search-endpoint")
-# os.environ["AZURE_SEARCH_KEY"] = dbutils.secrets.get("airbus-scope", "azure-search-key")
-
-# Limpiar colección previa de Chroma para evitar choques de dimensión (384 vs 1024)
+# Limpiar colección previa de Chroma para evitar choques de dimensión
 shutil.rmtree("/tmp/chroma_db", ignore_errors=True)
 
 if "src.config" in sys.modules:

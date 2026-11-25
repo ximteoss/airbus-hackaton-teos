@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TypedDict
+import time
+from typing import Any, TypedDict
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
@@ -24,6 +25,22 @@ from src.schemas import (
 )
 
 
+def _invoke_with_retry(runnable: Any, messages: list[Any], max_retries: int = 4, base_wait: float = 10.0) -> Any:
+    """Reintenta automáticamente con espera progresiva si el endpoint devuelve 429 / RateLimitError."""
+    for attempt in range(max_retries + 1):
+        try:
+            return runnable.invoke(messages)
+        except Exception as exc:
+            err_text = str(exc).lower()
+            is_rate_limit = "429" in err_text or "rate limit" in err_text or "request_limit_exceeded" in err_text
+            if is_rate_limit and attempt < max_retries:
+                wait = base_wait * (attempt + 1)
+                print(f"    [RateLimit 429] Esperando {wait:.0f}s antes de reintentar ({attempt + 1}/{max_retries})...", flush=True)
+                time.sleep(wait)
+                continue
+            raise
+
+
 # ---------------------------------------------------------------------------
 # 1. Subgrafo de auditoría por requisito (RAG + Reflexión + Trazabilidad)
 # ---------------------------------------------------------------------------
@@ -40,9 +57,12 @@ class SingleReqState(TypedDict):
 
 
 def _format_clauses(clauses: list[RegulationClause]) -> str:
-    return "\n\n".join(
-        f"### [{c.clause_id}] ({c.level}) {c.title}\n{c.text}" for c in clauses
-    )
+    parts: list[str] = []
+    for c in clauses:
+        limit = 3500 if c.level == "IR" else 1600
+        snippet = c.text[:limit]
+        parts.append(f"### [{c.clause_id}] ({c.level}) {c.title}\n{snippet}")
+    return "\n\n".join(parts)
 
 
 def build_single_req_subgraph(retriever: BaseRegulationRetriever):
@@ -69,10 +89,13 @@ def build_single_req_subgraph(retriever: BaseRegulationRetriever):
             f"CLÁUSULAS NORMATIVAS RECUPERADAS:\n{clauses_ctx}"
             f"{feedback_block}"
         )
-        draft: AuditDraft = auditor_llm.invoke([
-            SystemMessage(content=AUDITOR_SYSTEM_PROMPT),
-            HumanMessage(content=user_prompt),
-        ])
+        draft: AuditDraft = _invoke_with_retry(
+            auditor_llm,
+            [
+                SystemMessage(content=AUDITOR_SYSTEM_PROMPT),
+                HumanMessage(content=user_prompt),
+            ],
+        )
         return {"draft": draft, "iterations": state["iterations"] + 1}
 
     def rewrite_query_node(state: SingleReqState) -> dict:
@@ -111,10 +134,13 @@ def build_single_req_subgraph(retriever: BaseRegulationRetriever):
             f"CLÁUSULAS REALES:\n{clauses_ctx}\n\n"
             f"BORRADOR DEL AUDITOR:\n{draft.model_dump_json(indent=2)}"
         )
-        review: CriticReview = critic_llm.invoke([
-            SystemMessage(content=CRITIC_SYSTEM_PROMPT),
-            HumanMessage(content=user_prompt),
-        ])
+        review: CriticReview = _invoke_with_retry(
+            critic_llm,
+            [
+                SystemMessage(content=CRITIC_SYSTEM_PROMPT),
+                HumanMessage(content=user_prompt),
+            ],
+        )
         return {"critic": review, "feedback": review.feedback}
 
     def route_after_auditor(state: SingleReqState) -> str:
@@ -233,10 +259,13 @@ def build_document_audit_graph(retriever: BaseRegulationRetriever):
         reqs_dump = "\n".join(
             f"- [{r.req_id}] {r.title}: {r.text}" for r in state["requirements"]
         )
-        report: ConsistencyReport = consistency_llm.invoke([
-            SystemMessage(content=CONSISTENCY_SYSTEM_PROMPT),
-            HumanMessage(content=f"DOCUMENTO A REVISAR:\n{reqs_dump}"),
-        ])
+        report: ConsistencyReport = _invoke_with_retry(
+            consistency_llm,
+            [
+                SystemMessage(content=CONSISTENCY_SYSTEM_PROMPT),
+                HumanMessage(content=f"DOCUMENTO A REVISAR:\n{reqs_dump}"),
+            ],
+        )
         return {"consistency": report}
 
     def hitl_review_node(state: DocumentAuditState) -> dict:
