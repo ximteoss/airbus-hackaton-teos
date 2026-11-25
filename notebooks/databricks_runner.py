@@ -4,7 +4,7 @@
 # MAGIC Pipeline end-to-end: **Ingesta (EASA Part-IS + VLM) → RAG Híbrido / Azure AI Search → LangGraph (Auditor + Trazabilidad + Crítico + Consistencia) → HITL → Informe HTML + Evaluación Gold Set**.
 
 # COMMAND ----------
-# MAGIC %pip install -q -r ../requirements.txt databricks-langchain azure-search-documents
+# MAGIC %pip install -q langgraph langchain-core langchain-chroma langchain-huggingface langchain-openai langchain-google-genai pydantic pydantic-settings rank-bm25 lxml pypdf python-docx openpyxl sentence-transformers databricks-langchain azure-search-documents
 
 # COMMAND ----------
 dbutils.library.restartPython()  # type: ignore[name-defined]
@@ -36,7 +36,7 @@ import shutil
 import sys
 from pathlib import Path
 
-# 1. Localizar raíz del repo SIN cambiar el cwd (evita romper ../requirements.txt al re-ejecutar celda 2)
+# 1. Localizar raíz del repo SIN cambiar el cwd
 candidates = [Path.cwd(), *Path.cwd().parents]
 repo_root = next((p for p in candidates if (p / "src").is_dir()), None)
 if repo_root is None:
