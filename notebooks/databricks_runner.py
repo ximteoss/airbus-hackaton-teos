@@ -1,15 +1,32 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # Airbus Defence & Space — Auditoría Normativa Agéntica (IndesIAhack 2026)
 # MAGIC Pipeline end-to-end: **Ingesta (EASA Part-IS) → RAG Híbrido / Azure AI Search → LangGraph (Auditor + Trazabilidad + Crítico + Consistencia) → HITL → Informe HTML + Evaluación Gold Set**.
 
 # COMMAND ----------
+
 # MAGIC %pip install -q -r ../requirements.txt databricks-langchain azure-search-documents
 
 # COMMAND ----------
+
 dbutils.library.restartPython()  # type: ignore[name-defined]
 
 # COMMAND ----------
+
+from databricks.sdk import WorkspaceClient
+
+w = WorkspaceClient()
+endpoints = list(w.serving_endpoints.list())
+print(f"Endpoints disponibles ({len(endpoints)}):")
+for ep in endpoints:
+    print(f"  - {ep.name} | estado: {ep.state.ready if ep.state else 'desconocido'}")
+
+# COMMAND ----------
+
 import json
 import os
 import sys
@@ -30,16 +47,45 @@ dbutils.widgets.text("doc_path", "data/input_docs/sample_part_is_reqs.md", "5. D
 dbutils.widgets.text("gold_path", "data/gold_set/sample_gold.json", "6. Ruta Gold Set (opcional)")  # type: ignore[name-defined]
 
 # COMMAND ----------
-# Inyectar configuración de widgets en variables de entorno antes de importar src.config
+
+import importlib
+import os
+import shutil
+import sys
+from pathlib import Path
+
+candidates = [Path.cwd(), *Path.cwd().parents]
+repo_root = next((p for p in candidates if (p / "src").is_dir()), None)
+if repo_root is None:
+    raise FileNotFoundError(f"No encuentro 'src' desde {Path.cwd()}")
+
+repo_str = str(repo_root.resolve())
+if repo_str in sys.path:
+    sys.path.remove(repo_str)
+sys.path.insert(0, repo_str)
+os.chdir(repo_root)
+
+sys.path_importer_cache.clear()
+importlib.invalidate_caches()
+print(f"1) REPO_ROOT OK: {repo_str}")
+
+# 2. Fijar variables de entorno ANTES de importar src
 os.environ["LLM_PROVIDER"] = dbutils.widgets.get("llm_provider")  # type: ignore[name-defined]
 os.environ["LLM_MODEL"] = dbutils.widgets.get("llm_model")  # type: ignore[name-defined]
 os.environ["RETRIEVER_BACKEND"] = dbutils.widgets.get("retriever_backend")  # type: ignore[name-defined]
+os.environ["CHROMA_PERSIST_DIR"] = "/tmp/chroma_db"
+os.environ["EMBEDDING_PROVIDER"] = "databricks"
+os.environ["EMBEDDING_MODEL"] = "databricks-qwen3-embedding-0-6b"
+os.environ["TOP_K_CLAUSES"] = "7"
 
-# Si el Día 1 Airbus facilita secrets en Databricks (Azure OpenAI / Azure AI Search), descomenta y ajusta el scope:
-# os.environ["AZURE_OPENAI_ENDPOINT"] = dbutils.secrets.get("airbus-scope", "azure-openai-endpoint")
-# os.environ["AZURE_OPENAI_API_KEY"] = dbutils.secrets.get("airbus-scope", "azure-openai-key")
-# os.environ["AZURE_SEARCH_ENDPOINT"] = dbutils.secrets.get("airbus-scope", "azure-search-endpoint")
-# os.environ["AZURE_SEARCH_KEY"] = dbutils.secrets.get("airbus-scope", "azure-search-key")
+# Limpiar colección previa de Chroma para evitar choques de dimensión (384 vs 1024)
+shutil.rmtree("/tmp/chroma_db", ignore_errors=True)
+
+if "src.config" in sys.modules:
+    importlib.reload(sys.modules["src.config"])
+
+import mlflow
+mlflow.langchain.autolog()
 
 from langgraph.types import Command
 from src.agents.graph import build_document_audit_graph
@@ -50,24 +96,29 @@ from src.reporting.html_report import generate_html_report
 from src.retrieval.retriever import build_retriever
 from src.schemas import AuditReport
 
+print("2) Imports de src + MLflow Tracing OK")
+
+# 3. Cargar normativa y requisitos
 reg_path = Path(dbutils.widgets.get("reg_path"))  # type: ignore[name-defined]
 doc_path = Path(dbutils.widgets.get("doc_path"))  # type: ignore[name-defined]
 
 clauses = parse_easa_xml(reg_path) if reg_path.suffix.lower() == ".xml" else parse_easa_pdf(reg_path)
 reqs = extract_requirements_from_file(doc_path)
+print(f"3) Cláusulas cargadas: {len(clauses)} | Requisitos: {len(reqs)}")
 
-print(f"Cláusulas normativas cargadas: {len(clauses)}")
-print(f"Requisitos extraídos de {doc_path.name}: {len(reqs)}")
-
+# 4. Indexar y compilar grafo
 retriever = build_retriever()
 retriever.index_clauses(clauses)
 graph = build_document_audit_graph(retriever)
+print("4) Retriever y grafo listos")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ### Paso 1 — Ejecución del grafo agéntico hasta el punto de revisión humana (HITL)
 
 # COMMAND ----------
+
 thread_config = {"configurable": {"thread_id": f"dbx-audit-{doc_path.stem}"}}
 
 paused_result = graph.invoke(
@@ -92,11 +143,13 @@ else:
     print("Ejecución completada sin interrupción pendiente.")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ### Paso 2 — Revisión humana (HITL) y cierre del informe
 # MAGIC Modifica `HUMAN_OVERRIDES` si quieres corregir algún veredicto en directo durante la demo (o déjalo con `_action: approve_all` para aprobar todo).
 
 # COMMAND ----------
+
 HUMAN_OVERRIDES = {
     "_action": "approve_all",
     # Ejemplo de edición humana en vivo ante el jurado:
@@ -127,17 +180,21 @@ generate_html_report(report, html_path)
 print(f"Informe guardado en {json_path} y {html_path}")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ### Paso 3 — Dashboard interactivo embebido en Databricks
 
 # COMMAND ----------
+
 displayHTML(html_path.read_text(encoding="utf-8"))  # type: ignore[name-defined]
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ### Paso 4 — Evaluación objetiva frente al Gold Set (F1 y Trazabilidad)
 
 # COMMAND ----------
+
 gold_path = Path(dbutils.widgets.get("gold_path"))  # type: ignore[name-defined]
 if gold_path.exists():
     metrics = evaluate_against_gold(json_path, gold_path)
