@@ -9,9 +9,41 @@ from rank_bm25 import BM25Okapi
 from src.config import get_embeddings, settings
 from src.schemas import RegulationClause
 
+# Puente léxico ES -> EN para que BM25 no pierda precisión con requisitos en español frente a EASA Part-IS en inglés
+_BILINGUAL_HINTS: dict[str, list[str]] = {
+    "proveedor": ["contracting", "contracted", "supplier", "third", "organisation"],
+    "proveedores": ["contracting", "contracted", "supplier", "third", "organisation"],
+    "contrato": ["contracting", "contracted", "activities"],
+    "contratos": ["contracting", "contracted", "activities"],
+    "contratarán": ["contracting", "contracted", "activities"],
+    "terceros": ["contracting", "contracted", "third", "parties", "interfaces"],
+    "cloud": ["contracting", "contracted", "external", "service", "provider"],
+    "externos": ["contracting", "contracted", "external"],
+    "formación": ["personnel", "competence", "training", "qualifications"],
+    "personal": ["personnel", "staff", "competence", "qualifications"],
+    "cualificaciones": ["personnel", "qualifications", "competence"],
+    "notificación": ["reporting", "external", "competent", "authority", "72"],
+    "autoridad": ["competent", "authority", "external", "reporting"],
+    "logs": ["record-keeping", "records", "retention", "integrity", "5", "years"],
+    "registros": ["record-keeping", "records", "retention", "integrity"],
+    "evidencias": ["record-keeping", "records", "retention", "archived"],
+    "riesgos": ["risk", "assessment", "treatment", "severity", "threat"],
+    "riesgo": ["risk", "assessment", "treatment", "severity", "threat"],
+    "incidentes": ["incidents", "detection", "response", "recovery", "events"],
+    "incidente": ["incidents", "detection", "response", "recovery", "reporting"],
+    "mejora": ["continuous", "improvement", "isms"],
+}
 
-def _tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-zA-Z0-9\._\-]+", text.lower())
+
+def _tokenize(text: str, expand_bilingual: bool = False) -> list[str]:
+    tokens = re.findall(r"[a-zA-Z0-9áéíóúüñ\._\-]+", text.lower())
+    if not expand_bilingual:
+        return tokens
+    expanded = list(tokens)
+    for tok in tokens:
+        if tok in _BILINGUAL_HINTS:
+            expanded.extend(_BILINGUAL_HINTS[tok])
+    return expanded
 
 
 class BaseRegulationRetriever(ABC):
@@ -29,7 +61,7 @@ class BaseRegulationRetriever(ABC):
 
 
 class LocalHybridRetriever(BaseRegulationRetriever):
-    """Combina similitud semántica (Chroma) + BM25 vía RRF con prioridad estratificada a reglas IR."""
+    """Combina similitud semántica (Chroma) + BM25 bilingüe vía RRF con prioridad estratificada a reglas IR."""
 
     def __init__(self, collection_name: str = "easa_part_is") -> None:
         self.embeddings = get_embeddings()
@@ -46,7 +78,7 @@ class LocalHybridRetriever(BaseRegulationRetriever):
         self._clauses = clauses
         self._clause_map = {c.clause_id: c for c in clauses}
 
-        corpus = [_tokenize(f"{c.clause_id} {c.title} {c.text}") for c in clauses]
+        corpus = [_tokenize(f"{c.clause_id} {c.title} {c.title} {c.text}") for c in clauses]
         self._bm25 = BM25Okapi(corpus)
 
         existing = self.vectorstore.get()
@@ -75,26 +107,26 @@ class LocalHybridRetriever(BaseRegulationRetriever):
         rrf_scores: dict[str, float] = {}
         k_rrf = 60.0
 
-        # 1. Ranking semántico (Chroma) - mayor peso por ser multilingüe (ES <-> EN)
+        # 1. Ranking semántico (Chroma)
         dense_docs = self.vectorstore.similarity_search(query, k=k_candidates)
         for rank, doc in enumerate(dense_docs, start=1):
             cid = doc.metadata["clause_id"]
             rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.5 / (k_rrf + rank)
 
-        # 2. Ranking léxico (BM25)
+        # 2. Ranking léxico (BM25 con expansión bilingüe ES -> EN)
         if self._bm25 is not None:
-            scores = self._bm25.get_scores(_tokenize(query))
+            scores = self._bm25.get_scores(_tokenize(query, expand_bilingual=True))
             ranked_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k_candidates]
             for rank, idx in enumerate(ranked_indices, start=1):
                 if scores[idx] <= 0:
                     continue
                 cid = self._clauses[idx].clause_id
-                rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.0 / (k_rrf + rank)
+                rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.2 / (k_rrf + rank)
 
         ranked_ids = sorted(rrf_scores, key=lambda cid: rrf_scores[cid], reverse=True)
 
-        # 3. Selección estratificada: garantiza reglas vinculantes (IR) antes de rellenar con AMC/GM
-        ir_quota = max(3, top_k - 2)
+        # 3. Selección estratificada: prioriza reglas vinculantes (IR) antes de rellenar con AMC/GM
+        ir_quota = max(4, top_k - 1)
         ir_selected: list[str] = []
         support_selected: list[str] = []
 
