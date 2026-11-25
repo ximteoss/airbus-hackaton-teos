@@ -1,0 +1,10 @@
+[
+  {"req_id": "REQ-001", "verdict": "Cumple", "applicable_clauses": ["IS.I.OR.200", "IS.D.OR.200"]},
+  {"req_id": "REQ-002", "verdict": "No cumple", "applicable_clauses": ["IS.I.OR.205", "IS.D.OR.205"]},
+  {"req_id": "REQ-003", "verdict": "Cumple", "applicable_clauses": ["IS.I.OR.210", "IS.D.OR.210"]},
+  {"req_id": "REQ-004", "verdict": "Cumple", "applicable_clauses": ["IS.I.OR.220", "IS.D.OR.220"]},
+  {"req_id": "REQ-005", "verdict": "No cumple", "applicable_clauses": ["IS.I.OR.230", "IS.D.OR.230"]},
+  {"req_id": "REQ-006", "verdict": "No cumple", "applicable_clauses": ["IS.I.OR.235", "IS.D.OR.235"]},
+  {"req_id": "REQ-007", "verdict": "Cumple", "applicable_clauses": ["IS.I.OR.240", "IS.D.OR.240"]},
+  {"req_id": "REQ-008", "verdict": "No cumple", "applicable_clauses": ["IS.I.OR.245", "IS.D.OR.245"]}
+]

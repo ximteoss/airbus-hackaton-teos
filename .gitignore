@@ -1,0 +1,22 @@
+# Entornos virtuales y caché de Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+
+# Secretos y configuración local
+.env
+*.local.env
+
+# Salidas generadas y base vectorial local
+data/outputs/
+*.db
+*.sqlite3
+
+# Editor y SO
+.vscode/
+.DS_Store
+Thumbs.db
